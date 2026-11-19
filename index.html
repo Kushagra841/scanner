@@ -29,6 +29,12 @@
   .scroll { max-height: 380px; overflow: auto; }
   .sent { color: #135c22; font-weight: 600; }
   .pending { color: #8a5a00; font-weight: 600; }
+  .dl { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+  .dl > div { flex: 1; min-width: 160px; }
+  .dl input { width: 100%; font-size: 16px; padding: 10px; border: 2px solid #9aa7b5; border-radius: 8px; }
+  label.sub { font-weight: 400; font-size: 14px; color: #5d6b7a; }
+  button { font-size: 16px; padding: 12px 18px; border: 0; border-radius: 8px; background: #1f3a5f; color: #fff; cursor: pointer; }
+  #dlmsg { margin-top: 10px; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -53,6 +59,17 @@
         <tbody id="rows"></tbody>
       </table>
     </div>
+  </div>
+
+  <div class="card">
+    <label>Download all scans (admin)</label>
+    <div class="dl">
+      <div><label for="from" class="sub">From date</label><input type="date" id="from"></div>
+      <div><label for="to" class="sub">To date</label><input type="date" id="to"></div>
+      <div><label for="adminpw" class="sub">Admin password</label><input type="password" id="adminpw" autocomplete="off"></div>
+      <button id="export">Download Excel (CSV)</button>
+    </div>
+    <div id="dlmsg"></div>
   </div>
 </main>
 
@@ -178,8 +195,44 @@ codeBox.addEventListener("keydown", e => {
   flush();
 });
 
+// ---- download everything from the central sheet ----
+$("export").addEventListener("click", async () => {
+  const msg = $("dlmsg");
+  const pw = $("adminpw").value;
+  if (!pw) { msg.textContent = "Type the admin password first."; return; }
+  if (!configured) { msg.textContent = "Not connected to the Google Sheet."; return; }
+  msg.textContent = "Getting scans...";
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 60000);
+    const res = await fetch(SCRIPT_URL, {
+      method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "export", admin: pw }), signal: ctl.signal
+    });
+    clearTimeout(timer);
+    const out = await res.json();
+    if (!out.ok) { msg.textContent = "Not allowed: " + out.error; return; }
+
+    const from = $("from").value, to = $("to").value;
+    const rows = out.rows.filter(r => (!from || r[1] >= from) && (!to || r[1] <= to));
+    const q = s => '"' + String(s).replace(/"/g, '""') + '"';
+    const lines = [["Date", "Time", "Packer", "Barcode", "Repeat scan", "Received at"].join(",")].concat(
+      rows.map(r => [r[1], r[2], q(r[3]), `="${r[4]}"`, r[5], r[6]].join(",")));
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `scans_${dateStr(new Date())}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    msg.textContent = `Downloaded ${rows.length} scans.`;
+    $("adminpw").value = "";
+  } catch (e) { msg.textContent = "Could not download. Check the internet and try again."; }
+});
+
 codeBox.addEventListener("blur", () => setTimeout(() => { if (document.activeElement === document.body) codeBox.focus(); }, 50));
-document.addEventListener("click", e => { if (e.target !== packerBox) codeBox.focus(); });
+document.addEventListener("click", e => {
+  if (e.target === packerBox || e.target.closest(".dl")) return;
+  codeBox.focus();
+});
 packerBox.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem("packer_name", packerBox.value.trim()); codeBox.focus(); } });
 packerBox.addEventListener("change", () => localStorage.setItem("packer_name", packerBox.value.trim()));
 
