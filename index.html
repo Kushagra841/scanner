@@ -15,13 +15,16 @@
   main { max-width: 900px; margin: 20px auto; padding: 0 16px; }
   .card { background: #fff; border-radius: 10px; padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
   label { font-weight: 600; display: block; margin-bottom: 6px; }
-  input[type=text] { width: 100%; font-size: 22px; padding: 12px; border: 2px solid #9aa7b5; border-radius: 8px; }
+  input[type=text], input[type=password] { width: 100%; font-size: 22px; padding: 12px; border: 2px solid #9aa7b5; border-radius: 8px; }
   #code { font-size: 34px; padding: 18px; border-color: #1f3a5f; }
   #status { margin-top: 12px; padding: 14px; border-radius: 8px; font-size: 20px; font-weight: 600; background: #e8edf3; text-align: center; overflow-wrap: anywhere; }
   #status.ok  { background: #c8f0cf; color: #135c22; }
   #status.dup { background: #ffe3a3; color: #7a4b00; }
   #status.err { background: #ffc9c9; color: #8a1111; }
-  .count { font-size: 18px; margin-bottom: 8px; }
+  .bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
+  .count { font-size: 18px; }
+  button { font-size: 16px; padding: 12px 18px; border: 0; border-radius: 8px; background: #1f3a5f; color: #fff; cursor: pointer; }
+  button.grey { background: #6b7785; }
   table { width: 100%; border-collapse: collapse; font-size: 16px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e1e6ec; white-space: nowrap; }
   th { background: #eef2f6; position: sticky; top: 0; }
@@ -29,12 +32,12 @@
   .scroll { max-height: 380px; overflow: auto; }
   .sent { color: #135c22; font-weight: 600; }
   .pending { color: #8a5a00; font-weight: 600; }
-  .dl { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
-  .dl > div { flex: 1; min-width: 160px; }
-  .dl input { width: 100%; font-size: 16px; padding: 10px; border: 2px solid #9aa7b5; border-radius: 8px; }
-  label.sub { font-weight: 400; font-size: 14px; color: #5d6b7a; }
-  button { font-size: 16px; padding: 12px 18px; border: 0; border-radius: 8px; background: #1f3a5f; color: #fff; cursor: pointer; }
-  #dlmsg { margin-top: 10px; font-weight: 600; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 20; }
+  #modal[hidden] { display: none; }
+  #modal .box { background: #fff; border-radius: 12px; padding: 22px; width: 100%; max-width: 400px; }
+  #modal p { margin: 0 0 12px; }
+  #modal .btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  #modalErr { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: #ffc9c9; color: #8a1111; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -52,7 +55,10 @@
   </div>
 
   <div class="card">
-    <div class="count" id="count"></div>
+    <div class="bar">
+      <div class="count" id="count"></div>
+      <button id="export">Download Excel (CSV)</button>
+    </div>
     <div class="scroll">
       <table>
         <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Barcode</th><th>Sent</th></tr></thead>
@@ -60,18 +66,20 @@
       </table>
     </div>
   </div>
-
-  <div class="card">
-    <label>Download all scans (admin)</label>
-    <div class="dl">
-      <div><label for="from" class="sub">From date</label><input type="date" id="from"></div>
-      <div><label for="to" class="sub">To date</label><input type="date" id="to"></div>
-      <div><label for="adminpw" class="sub">Admin password</label><input type="password" id="adminpw" autocomplete="off"></div>
-      <button id="export">Download Excel (CSV)</button>
-    </div>
-    <div id="dlmsg"></div>
-  </div>
 </main>
+
+<div id="modal" hidden>
+  <div class="box">
+    <p id="modalMsg">Admin only. Type the admin password to download every packer's scans.</p>
+    <label for="pw">Admin password</label>
+    <input type="password" id="pw" autocomplete="off">
+    <div id="modalErr" hidden></div>
+    <div class="btns">
+      <button id="modalCancel" class="grey">Cancel</button>
+      <button id="modalOk">Download</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ---- SETTINGS: the admin fills these two lines in once ----
@@ -81,7 +89,7 @@ const SECRET = "shantam@143";                   // same word as SECRET in the Go
 
 const KEY = "scan_log_v2";
 const $ = id => document.getElementById(id);
-const codeBox = $("code"), packerBox = $("packer"), statusBox = $("status"), net = $("net");
+const codeBox = $("code"), packerBox = $("packer"), statusBox = $("status"), net = $("net"), modal = $("modal");
 const configured = !SCRIPT_URL.includes("PASTE_");
 
 function load() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; } }
@@ -100,6 +108,7 @@ function beep(freq, ms) {
 }
 function setStatus(text, cls) { statusBox.textContent = text; statusBox.className = cls || ""; }
 function setNet(text, cls) { net.textContent = text; net.className = cls || ""; }
+function focusScan() { if (modal.hidden) codeBox.focus(); }
 
 let lastId = null;
 
@@ -195,13 +204,16 @@ codeBox.addEventListener("keydown", e => {
   flush();
 });
 
-// ---- download everything from the central sheet ----
-$("export").addEventListener("click", async () => {
-  const msg = $("dlmsg");
-  const pw = $("adminpw").value;
-  if (!pw) { msg.textContent = "Type the admin password first."; return; }
-  if (!configured) { msg.textContent = "Not connected to the Google Sheet."; return; }
-  msg.textContent = "Getting scans...";
+// ---- download everything from the central sheet (admin password asked first) ----
+function openModal() { $("pw").value = ""; $("modalErr").hidden = true; modal.hidden = false; $("pw").focus(); }
+function closeModal() { modal.hidden = true; focusScan(); }
+
+async function doDownload() {
+  const pw = $("pw").value;
+  const err = $("modalErr");
+  if (!pw) { err.textContent = "Type the admin password."; err.hidden = false; return; }
+  if (!configured) { err.textContent = "Not connected to the Google Sheet."; err.hidden = false; return; }
+  const ok = $("modalOk"); ok.disabled = true; ok.textContent = "Getting scans...";
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 60000);
@@ -211,34 +223,38 @@ $("export").addEventListener("click", async () => {
     });
     clearTimeout(timer);
     const out = await res.json();
-    if (!out.ok) { msg.textContent = "Not allowed: " + out.error; return; }
+    if (!out.ok) { err.textContent = out.error === "wrong admin password" ? "Wrong password." : "Not allowed: " + out.error; err.hidden = false; return; }
 
-    const from = $("from").value, to = $("to").value;
-    const rows = out.rows.filter(r => (!from || r[1] >= from) && (!to || r[1] <= to));
     const q = s => '"' + String(s).replace(/"/g, '""') + '"';
-    const lines = [["Date", "Time", "Packer", "Barcode", "Repeat scan", "Received at"].join(",")].concat(
-      rows.map(r => [r[1], r[2], q(r[3]), `="${r[4]}"`, r[5], r[6]].join(",")));
+    const lines = ["Date,Time,Packer,Barcode,Repeat scan,Received at"].concat(
+      out.rows.map(r => [r[1], r[2], q(r[3]), `="${r[4]}"`, r[5], r[6]].join(",")));   // ="..." keeps long barcodes intact in Excel
     const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `scans_${dateStr(new Date())}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
-    msg.textContent = `Downloaded ${rows.length} scans.`;
-    $("adminpw").value = "";
-  } catch (e) { msg.textContent = "Could not download. Check the internet and try again."; }
-});
+    closeModal();
+    setStatus(`Downloaded ${out.rows.length} scans.`, "ok");
+  } catch (e) {
+    err.textContent = "Could not download. Check the internet and try again."; err.hidden = false;
+  } finally { ok.disabled = false; ok.textContent = "Download"; }
+}
+$("export").addEventListener("click", openModal);
+$("modalCancel").addEventListener("click", closeModal);
+$("modalOk").addEventListener("click", doDownload);
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") doDownload(); if (e.key === "Escape") closeModal(); });
 
-codeBox.addEventListener("blur", () => setTimeout(() => { if (document.activeElement === document.body) codeBox.focus(); }, 50));
+codeBox.addEventListener("blur", () => setTimeout(() => { if (document.activeElement === document.body) focusScan(); }, 50));
 document.addEventListener("click", e => {
-  if (e.target === packerBox || e.target.closest(".dl")) return;
-  codeBox.focus();
+  if (e.target === packerBox || e.target.closest("button") || e.target.closest("#modal")) return;
+  focusScan();
 });
 packerBox.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem("packer_name", packerBox.value.trim()); codeBox.focus(); } });
 packerBox.addEventListener("change", () => localStorage.setItem("packer_name", packerBox.value.trim()));
 
 try { packerBox.value = localStorage.getItem("packer_name") || ""; } catch (e) {}
 render();
-codeBox.focus();
+focusScan();
 flush();
 </script>
 </body>
