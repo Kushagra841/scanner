@@ -61,7 +61,7 @@
     </div>
     <div class="scroll">
       <table>
-        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Barcode</th><th>Sent</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Barcode</th><th>Status</th><th>Sent</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -122,7 +122,7 @@ function render() {
   list.slice(-50).reverse().forEach(r => {
     const tr = document.createElement("tr");
     if (r.repeat) tr.className = "dup";
-    [r.date, r.time, r.packer, r.code].forEach(v => {
+    [r.date, r.time, r.packer, r.code, "Forward"].forEach(v => {
       const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
     });
     const td = document.createElement("td");
