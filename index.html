@@ -3,43 +3,40 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Barcode Scan Logger</title>
+<title>Packing Scan Log</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f2f4f7; color: #1d2733; }
-  header { background: #1f3a5f; color: #fff; padding: 14px 24px; font-size: 22px; font-weight: 600; }
+  header { background: #1f3a5f; color: #fff; padding: 14px 24px; font-size: 22px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #net { font-size: 15px; font-weight: 600; padding: 6px 12px; border-radius: 20px; background: #e6ecf3; color: #1f3a5f; }
+  #net.ok { background: #c8f0cf; color: #135c22; }
+  #net.wait { background: #ffe3a3; color: #7a4b00; }
+  #net.bad { background: #ffc9c9; color: #8a1111; }
   main { max-width: 900px; margin: 20px auto; padding: 0 16px; }
   .card { background: #fff; border-radius: 10px; padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
   label { font-weight: 600; display: block; margin-bottom: 6px; }
   input[type=text] { width: 100%; font-size: 22px; padding: 12px; border: 2px solid #9aa7b5; border-radius: 8px; }
   #code { font-size: 34px; padding: 18px; border-color: #1f3a5f; }
-  #status { margin-top: 12px; padding: 14px; border-radius: 8px; font-size: 20px; font-weight: 600; background: #e8edf3; text-align: center; }
-  #status.ok   { background: #c8f0cf; color: #135c22; }
-  #status.dup  { background: #ffe3a3; color: #7a4b00; }
-  #status.err  { background: #ffc9c9; color: #8a1111; }
-  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
-  .row > div { flex: 1; min-width: 200px; }
-  button { font-size: 16px; padding: 12px 18px; border: 0; border-radius: 8px; background: #1f3a5f; color: #fff; cursor: pointer; }
-  button.grey { background: #6b7785; }
-  button.small { font-size: 13px; padding: 5px 10px; background: #b03030; }
+  #status { margin-top: 12px; padding: 14px; border-radius: 8px; font-size: 20px; font-weight: 600; background: #e8edf3; text-align: center; overflow-wrap: anywhere; }
+  #status.ok  { background: #c8f0cf; color: #135c22; }
+  #status.dup { background: #ffe3a3; color: #7a4b00; }
+  #status.err { background: #ffc9c9; color: #8a1111; }
+  .count { font-size: 18px; margin-bottom: 8px; }
   table { width: 100%; border-collapse: collapse; font-size: 16px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e1e6ec; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e1e6ec; white-space: nowrap; }
   th { background: #eef2f6; position: sticky; top: 0; }
   tr.dup td { background: #fff4d6; }
-  .count { font-size: 18px; margin-bottom: 8px; }
-  .scroll { max-height: 380px; overflow-y: auto; }
+  .scroll { max-height: 380px; overflow: auto; }
+  .sent { color: #135c22; font-weight: 600; }
+  .pending { color: #8a5a00; font-weight: 600; }
 </style>
 </head>
 <body>
-<header>Barcode Scan Logger</header>
+<header><span>Packing Scan Log</span><span id="net">Starting...</span></header>
 <main>
   <div class="card">
-    <div class="row">
-      <div>
-        <label for="packer">Packer name</label>
-        <input type="text" id="packer" placeholder="Type your name once" autocomplete="off">
-      </div>
-    </div>
+    <label for="packer">Packer name</label>
+    <input type="text" id="packer" placeholder="Type your name once" autocomplete="off">
   </div>
 
   <div class="card">
@@ -49,16 +46,10 @@
   </div>
 
   <div class="card">
-    <div class="row" style="margin-bottom:10px">
-      <div class="count" id="count"></div>
-      <div style="flex:0 0 auto;display:flex;gap:10px">
-        <button id="export">Download Excel (CSV)</button>
-        <button id="clear" class="grey">Clear all (admin)</button>
-      </div>
-    </div>
+    <div class="count" id="count"></div>
     <div class="scroll">
       <table>
-        <thead><tr><th>#</th><th>Date</th><th>Time</th><th>Packer</th><th>Barcode</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Barcode</th><th>Sent</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -66,17 +57,20 @@
 </main>
 
 <script>
-const KEY = "scan_log_v1";
-const ADMIN_PIN = "1234";          // change this, it protects "Clear all"
+// ---- SETTINGS: the admin fills these two lines in once ----
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxSWErNCs3sfgomkPH5xBZ2imP_xCzVKsU2AXcDwJiwbfSRb8xVqDavfSqDMGoaGl5PkQ/exec";
+const SECRET = "shantam@143";                   // same word as SECRET in the Google script
+// -----------------------------------------------------------
 
+const KEY = "scan_log_v2";
 const $ = id => document.getElementById(id);
-const codeBox = $("code"), packerBox = $("packer"), statusBox = $("status");
+const codeBox = $("code"), packerBox = $("packer"), statusBox = $("status"), net = $("net");
+const configured = !SCRIPT_URL.includes("PASTE_");
 
 function load() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; } }
-function save(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
+function save(list) { try { localStorage.setItem(KEY, JSON.stringify(list)); return true; } catch (e) { return false; } }
 
-const p2 = n => String(n).padStart(2, "0");
-const p3 = n => String(n).padStart(3, "0");
+const p2 = n => String(n).padStart(2, "0"), p3 = n => String(n).padStart(3, "0");
 const dateStr = d => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
 const timeStr = d => `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${p3(d.getMilliseconds())}`;
 
@@ -87,112 +81,112 @@ function beep(freq, ms) {
     o.start(); setTimeout(() => { o.stop(); ctx.close(); }, ms);
   } catch (e) {}
 }
-
 function setStatus(text, cls) { statusBox.textContent = text; statusBox.className = cls || ""; }
+function setNet(text, cls) { net.textContent = text; net.className = cls || ""; }
+
+let lastId = null;
 
 function render() {
   const list = load();
   const today = dateStr(new Date());
-  const todays = list.filter(r => r.date === today);
-  $("count").textContent = `Scans today: ${todays.length}   |   Total saved: ${list.length}`;
-  const body = $("rows"); body.innerHTML = "";
-  list.slice(-200).reverse().forEach((r, i) => {
+  const waiting = list.filter(r => !r.sent).length;
+  $("count").textContent = `Scans today on this PC: ${list.filter(r => r.date === today).length}` +
+                           (waiting ? `   |   Waiting to send: ${waiting}` : "");
+  const body = $("rows"); body.textContent = "";
+  list.slice(-50).reverse().forEach(r => {
     const tr = document.createElement("tr");
-    if (r.dup) tr.className = "dup";
-    [list.length - i, r.date, r.time, r.packer, r.code].forEach(v => {
+    if (r.repeat) tr.className = "dup";
+    [r.date, r.time, r.packer, r.code].forEach(v => {
       const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
     });
-    const del = document.createElement("td");
-    const btn = document.createElement("button");
-    btn.textContent = "Delete"; btn.className = "small";
-    btn.addEventListener("click", () => deleteEntry(list.length - 1 - i));
-    del.appendChild(btn); tr.appendChild(del);
-    body.appendChild(tr);
+    const td = document.createElement("td");
+    td.textContent = r.sent ? "Yes" : "Waiting"; td.className = r.sent ? "sent" : "pending";
+    tr.appendChild(td); body.appendChild(tr);
   });
+  if (!configured) setNet("Not connected to Google Sheet", "bad");
+  else if (waiting) setNet(`Sending... (${waiting} waiting)`, "wait");
+  else setNet("All scans sent", "ok");
 }
 
-function deleteEntry(index) {
-  const list = load();
-  const r = list[index];
-  if (!r) return;
-  const pin = prompt("Admin PIN to delete this scan:");
-  if (pin === null) { codeBox.focus(); return; }
-  if (pin !== ADMIN_PIN) { alert("Wrong PIN."); codeBox.focus(); return; }
-  if (confirm(`Delete this scan?\n${r.date} ${r.time}\n${r.packer}\n${r.code}`)) {
-    list.splice(index, 1);
-    save(list); render(); setStatus("Scan deleted.", "");
-  }
-  codeBox.focus();
-}
+// ---- sending: one at a time, in order, retried until it works ----
+let sending = false;
+async function flush() {
+  if (sending || !configured) return;
+  sending = true;
+  try {
+    while (true) {
+      const list = load();
+      const item = list.find(r => !r.sent);
+      if (!item) break;
+      let result;
+      try {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 25000);
+        const res = await fetch(SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ key: SECRET, id: item.id, date: item.date, time: item.time, packer: item.packer, code: item.code }),
+          signal: ctl.signal
+        });
+        clearTimeout(timer);
+        result = await res.json();
+      } catch (e) { setNet("No internet. Scans are safe on this PC.", "wait"); break; }
 
+      if (!result || !result.ok) { setNet("Could not send. Tell the admin.", "bad"); break; }
+
+      const fresh = load();
+      const row = fresh.find(r => r.id === item.id);
+      if (row) {
+        row.sent = true;
+        if (result.repeat) row.repeat = true;
+        // keep unsent rows and the latest 200 sent rows
+        const keep = fresh.filter(r => !r.sent).concat(fresh.filter(r => r.sent).slice(-200));
+        save(fresh.filter(r => keep.includes(r)));
+      }
+      if (result.repeat && item.id === lastId) {
+        setStatus(`ALREADY SCANNED before (${result.firstSeen}).`, "dup"); beep(300, 500);
+      }
+      render();
+    }
+  } finally { sending = false; render(); }
+}
+setInterval(flush, 10000);
+window.addEventListener("online", flush);
+
+// ---- scanning ----
 codeBox.addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
   e.preventDefault();
-  const now = new Date();                       // exact moment the scan arrives
+  const now = new Date();                          // exact moment the scan arrives
   const code = codeBox.value.trim();
   codeBox.value = "";
   if (!code) return;
-
   const packer = packerBox.value.trim();
-  if (!packer) {
-    setStatus("Please type your name first, then scan again.", "err");
-    beep(200, 400); packerBox.focus(); return;
-  }
+  if (!packer) { setStatus("Please type your name first, then scan again.", "err"); beep(200, 400); packerBox.focus(); return; }
 
   const list = load();
   const earlier = list.find(r => r.code === code);
-  list.push({ date: dateStr(now), time: timeStr(now), packer, code, dup: !!earlier });
-  save(list);
+  const item = { id: now.getTime().toString(36) + Math.random().toString(36).slice(2, 7),
+                 date: dateStr(now), time: timeStr(now), packer, code, sent: false, repeat: !!earlier };
+  list.push(item);
+  if (!save(list)) { setStatus("COULD NOT SAVE. Tell the admin.", "err"); beep(200, 600); return; }
+  lastId = item.id;
 
-  if (earlier) {
-    setStatus(`ALREADY SCANNED before (${earlier.date} ${earlier.time}). Saved again.`, "dup");
-    beep(300, 500);
-  } else {
-    setStatus(`Saved: ${code}   at ${timeStr(now)}`, "ok");
-    beep(1000, 120);
-  }
+  if (earlier) { setStatus(`ALREADY SCANNED before (${earlier.date} ${earlier.time}). Saved again.`, "dup"); beep(300, 500); }
+  else { setStatus(`Saved: ${code}   at ${timeStr(now)}`, "ok"); beep(1000, 120); }
   render();
+  flush();
 });
 
-// keep the scan box ready so the packer never has to click
-codeBox.addEventListener("blur", () => setTimeout(() => {
-  if (document.activeElement === document.body) codeBox.focus();
-}, 50));
-document.addEventListener("click", e => {
-  if (e.target === packerBox || e.target.tagName === "BUTTON") return;
-  codeBox.focus();
-});
+codeBox.addEventListener("blur", () => setTimeout(() => { if (document.activeElement === document.body) codeBox.focus(); }, 50));
+document.addEventListener("click", e => { if (e.target !== packerBox) codeBox.focus(); });
 packerBox.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem("packer_name", packerBox.value.trim()); codeBox.focus(); } });
 packerBox.addEventListener("change", () => localStorage.setItem("packer_name", packerBox.value.trim()));
 
-$("export").addEventListener("click", () => {
-  const list = load();
-  const q = s => '"' + String(s).replace(/"/g, '""') + '"';
-  // ="..." keeps Excel from turning long barcodes into 8.9E+12
-  const lines = ["Date,Time,Packer,Barcode,Repeat scan"].concat(
-    list.map(r => [r.date, r.time, q(r.packer), `="${r.code}"`, r.dup ? "YES" : ""].join(","))
-  );
-  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `scans_${dateStr(new Date())}.csv`;
-  a.click();
-  codeBox.focus();
-});
-
-$("clear").addEventListener("click", () => {
-  const pin = prompt("Admin PIN to delete ALL saved scans:");
-  if (pin === ADMIN_PIN) {
-    if (confirm("This deletes every saved scan. Did you download the Excel file first?")) {
-      save([]); render(); setStatus("All scans cleared.", "");
-    }
-  } else if (pin !== null) { alert("Wrong PIN."); }
-  codeBox.focus();
-});
-
-packerBox.value = localStorage.getItem("packer_name") || "";
+try { packerBox.value = localStorage.getItem("packer_name") || ""; } catch (e) {}
 render();
 codeBox.focus();
+flush();
 </script>
 </body>
 </html>
