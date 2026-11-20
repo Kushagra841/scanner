@@ -21,6 +21,9 @@
   #status.ok  { background: #c8f0cf; color: #135c22; }
   #status.dup { background: #ffe3a3; color: #7a4b00; }
   #status.err { background: #ffc9c9; color: #8a1111; }
+  .who { display: flex; gap: 12px; flex-wrap: wrap; }
+  .who > div { flex: 1; min-width: 200px; }
+  select { width: 100%; font-size: 22px; padding: 12px; border: 2px solid #9aa7b5; border-radius: 8px; background: #fff; color: #1d2733; }
   .bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
   .count { font-size: 18px; }
   button { font-size: 16px; padding: 12px 18px; border: 0; border-radius: 8px; background: #1f3a5f; color: #fff; cursor: pointer; }
@@ -44,8 +47,16 @@
 <header><span>Packing Scan Log</span><span id="net">Starting...</span></header>
 <main>
   <div class="card">
-    <label for="packer">Packer name</label>
-    <input type="text" id="packer" placeholder="Type your name once" autocomplete="off">
+    <div class="who">
+      <div>
+        <label for="packer">Packer name</label>
+        <input type="text" id="packer" placeholder="Type your name once" autocomplete="off">
+      </div>
+      <div>
+        <label for="table">Camera / Table no.</label>
+        <select id="table"><option value="">Select...</option></select>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -61,7 +72,7 @@
     </div>
     <div class="scroll">
       <table>
-        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Barcode</th><th>Status</th><th>Sent</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Camera</th><th>Barcode</th><th>Status</th><th>Sent</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -87,9 +98,10 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxSWErNCs3sfgomkPH5x
 const SECRET = "shantam@143";                   // same word as SECRET in the Google script
 // -----------------------------------------------------------
 
+const CAMERAS = 10;                              // how many cameras / tables there are
 const KEY = "scan_log_v2";
 const $ = id => document.getElementById(id);
-const codeBox = $("code"), packerBox = $("packer"), statusBox = $("status"), net = $("net"), modal = $("modal");
+const codeBox = $("code"), packerBox = $("packer"), tableBox = $("table"), statusBox = $("status"), net = $("net"), modal = $("modal");
 const configured = !SCRIPT_URL.includes("PASTE_");
 
 function load() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; } }
@@ -122,7 +134,7 @@ function render() {
   list.slice(-50).reverse().forEach(r => {
     const tr = document.createElement("tr");
     if (r.repeat) tr.className = "dup";
-    [r.date, r.time, r.packer, r.code, "Forward"].forEach(v => {
+    [r.date, r.time, r.packer, r.table || "", r.code, "Forward"].forEach(v => {
       const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
     });
     const td = document.createElement("td");
@@ -151,7 +163,7 @@ async function flush() {
         const res = await fetch(SCRIPT_URL, {
           method: "POST",
           headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ key: SECRET, id: item.id, date: item.date, time: item.time, packer: item.packer, code: item.code }),
+          body: JSON.stringify({ key: SECRET, id: item.id, date: item.date, time: item.time, packer: item.packer, table: item.table, code: item.code }),
           signal: ctl.signal
         });
         clearTimeout(timer);
@@ -189,11 +201,13 @@ codeBox.addEventListener("keydown", e => {
   if (!code) return;
   const packer = packerBox.value.trim();
   if (!packer) { setStatus("Please type your name first, then scan again.", "err"); beep(200, 400); packerBox.focus(); return; }
+  const table = tableBox.value;
+  if (!table) { setStatus("Please choose your camera / table number first, then scan again.", "err"); beep(200, 400); tableBox.focus(); return; }
 
   const list = load();
   const earlier = list.find(r => r.code === code);
   const item = { id: now.getTime().toString(36) + Math.random().toString(36).slice(2, 7),
-                 date: dateStr(now), time: timeStr(now), packer, code, sent: false, repeat: !!earlier };
+                 date: dateStr(now), time: timeStr(now), packer, table, code, sent: false, repeat: !!earlier };
   list.push(item);
   if (!save(list)) { setStatus("COULD NOT SAVE. Tell the admin.", "err"); beep(200, 600); return; }
   lastId = item.id;
@@ -226,8 +240,8 @@ async function doDownload() {
     if (!out.ok) { err.textContent = out.error === "wrong admin password" ? "Wrong password." : "Not allowed: " + out.error; err.hidden = false; return; }
 
     const q = s => '"' + String(s).replace(/"/g, '""') + '"';
-    const lines = ["Date,Time,Packer,Barcode,Repeat scan,Received at,Status"].concat(
-      out.rows.map(r => [r[1], r[2], q(r[3]), `="${r[4]}"`, r[5], r[6], r[7] || "Forward"].join(",")));   // ="..." keeps long barcodes intact in Excel
+    const lines = ["Date,Time,Packer,Camera / Table,Barcode,Repeat scan,Received at,Status"].concat(
+      out.rows.map(r => [r[1], r[2], q(r[3]), q(r[8] || ""), `="${r[4]}"`, r[5], r[6], r[7] || "Forward"].join(",")));   // ="..." keeps long barcodes intact in Excel
     const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -246,9 +260,14 @@ $("pw").addEventListener("keydown", e => { if (e.key === "Enter") doDownload(); 
 
 codeBox.addEventListener("blur", () => setTimeout(() => { if (document.activeElement === document.body) focusScan(); }, 50));
 document.addEventListener("click", e => {
-  if (e.target === packerBox || e.target.closest("button") || e.target.closest("#modal")) return;
+  if (e.target === packerBox || e.target === tableBox || e.target.closest("button") || e.target.closest("#modal")) return;
   focusScan();
 });
+for (let i = 1; i <= CAMERAS; i++) {
+  const o = document.createElement("option"); o.value = String(i); o.textContent = "Camera / Table " + i; tableBox.appendChild(o);
+}
+try { tableBox.value = localStorage.getItem("table_no") || ""; } catch (e) {}
+tableBox.addEventListener("change", () => { try { localStorage.setItem("table_no", tableBox.value); } catch (e) {} focusScan(); });
 packerBox.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem("packer_name", packerBox.value.trim()); codeBox.focus(); } });
 packerBox.addEventListener("change", () => localStorage.setItem("packer_name", packerBox.value.trim()));
 
