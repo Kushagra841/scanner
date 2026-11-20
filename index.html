@@ -53,7 +53,7 @@
         <input type="text" id="packer" placeholder="Type your name once" autocomplete="off">
       </div>
       <div>
-        <label for="table">Camera / Table no.</label>
+        <label for="table">Set / Camera no.</label>
         <select id="table"><option value="">Select...</option></select>
       </div>
     </div>
@@ -98,7 +98,7 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxSWErNCs3sfgomkPH5x
 const SECRET = "shantam@143";                   // same word as SECRET in the Google script
 // -----------------------------------------------------------
 
-const CAMERAS = 10;                              // how many cameras / tables there are
+const CAMERAS_PER_SET = 4;                       // cameras in each set (Set A and Set B)
 const KEY = "scan_log_v2";
 const $ = id => document.getElementById(id);
 const codeBox = $("code"), packerBox = $("packer"), tableBox = $("table"), statusBox = $("status"), net = $("net"), modal = $("modal");
@@ -202,7 +202,7 @@ codeBox.addEventListener("keydown", e => {
   const packer = packerBox.value.trim();
   if (!packer) { setStatus("Please type your name first, then scan again.", "err"); beep(200, 400); packerBox.focus(); return; }
   const table = tableBox.value;
-  if (!table) { setStatus("Please choose your camera / table number first, then scan again.", "err"); beep(200, 400); tableBox.focus(); return; }
+  if (!table) { setStatus("Please choose your set and camera number first, then scan again.", "err"); beep(200, 400); tableBox.focus(); return; }
 
   const list = load();
   const earlier = list.find(r => r.code === code);
@@ -263,9 +263,13 @@ document.addEventListener("click", e => {
   if (e.target === packerBox || e.target === tableBox || e.target.closest("button") || e.target.closest("#modal")) return;
   focusScan();
 });
-for (let i = 1; i <= CAMERAS; i++) {
-  const o = document.createElement("option"); o.value = String(i); o.textContent = "Camera / Table " + i; tableBox.appendChild(o);
-}
+["A", "B"].forEach(set => {                       // Set A: cameras 1-4, Set B: cameras 1-4
+  const g = document.createElement("optgroup"); g.label = "Set " + set;
+  for (let i = 1; i <= CAMERAS_PER_SET; i++) {
+    const o = document.createElement("option"); o.value = `${set}-${i}`; o.textContent = `Set ${set} - Camera ${i}`; g.appendChild(o);
+  }
+  tableBox.appendChild(g);
+});
 try { tableBox.value = localStorage.getItem("table_no") || ""; } catch (e) {}
 tableBox.addEventListener("change", () => { try { localStorage.setItem("table_no", tableBox.value); } catch (e) {} focusScan(); });
 packerBox.addEventListener("keydown", e => { if (e.key === "Enter") { localStorage.setItem("packer_name", packerBox.value.trim()); codeBox.focus(); } });
