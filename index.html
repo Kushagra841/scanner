@@ -35,12 +35,14 @@
   .scroll { max-height: 380px; overflow: auto; }
   .sent { color: #135c22; font-weight: 600; }
   .pending { color: #8a5a00; font-weight: 600; }
-  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 20; }
-  #modal[hidden] { display: none; }
-  #modal .box { background: #fff; border-radius: 12px; padding: 22px; width: 100%; max-width: 400px; }
-  #modal p { margin: 0 0 12px; }
-  #modal .btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
-  #modalErr { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: #ffc9c9; color: #8a1111; font-weight: 600; }
+  .btns { display: flex; gap: 10px; flex-wrap: wrap; }
+  button.danger { background: #b03030; }
+  #modal, #clearModal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 20; }
+  #modal[hidden], #clearModal[hidden] { display: none; }
+  #modal .box, #clearModal .box { background: #fff; border-radius: 12px; padding: 22px; width: 100%; max-width: 400px; }
+  #modal p, #clearModal p { margin: 0 0 12px; }
+  #modal .btns, #clearModal .btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  #modalErr, .modalErr { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: #ffc9c9; color: #8a1111; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -68,7 +70,10 @@
   <div class="card">
     <div class="bar">
       <div class="count" id="count"></div>
-      <button id="export">Download Excel (CSV)</button>
+      <div class="btns">
+        <button id="clear" class="grey">Clear list</button>
+        <button id="export">Download Excel (CSV)</button>
+      </div>
     </div>
     <div class="scroll">
       <table>
@@ -92,10 +97,24 @@
   </div>
 </div>
 
+<div id="clearModal" class="overlay" hidden>
+  <div class="box">
+    <p id="clearMsg"></p>
+    <label for="clearPw">Admin password</label>
+    <input type="password" id="clearPw" autocomplete="off">
+    <div id="clearErr" class="modalErr" hidden>Wrong password.</div>
+    <div class="btns">
+      <button id="clearCancel" class="grey">Cancel</button>
+      <button id="clearOk" class="danger">Clear list</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ---- SETTINGS: the admin fills these two lines in once ----
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxSWErNCs3sfgomkPH5xBZ2imP_xCzVKsU2AXcDwJiwbfSRb8xVqDavfSqDMGoaGl5PkQ/exec";
 const SECRET = "shantam@143";                   // same word as SECRET in the Google script
+const CLEAR_PASSWORD = "1234";                   // password to clear the list on screen (change this)
 // -----------------------------------------------------------
 
 const CAMERAS_PER_SET = 4;                       // cameras in each set (Set A and Set B)
@@ -120,7 +139,7 @@ function beep(freq, ms) {
 }
 function setStatus(text, cls) { statusBox.textContent = text; statusBox.className = cls || ""; }
 function setNet(text, cls) { net.textContent = text; net.className = cls || ""; }
-function focusScan() { if (modal.hidden) codeBox.focus(); }
+function focusScan() { if (modal.hidden && $("clearModal").hidden) codeBox.focus(); }
 
 let lastId = null;
 
@@ -258,9 +277,33 @@ $("modalCancel").addEventListener("click", closeModal);
 $("modalOk").addEventListener("click", doDownload);
 $("pw").addEventListener("keydown", e => { if (e.key === "Enter") doDownload(); if (e.key === "Escape") closeModal(); });
 
+// ---- clear the list on this PC (the Google Sheet is NOT touched) ----
+// Scans that are still waiting to be sent are kept, so nothing is ever lost.
+const clearModal = $("clearModal");
+function closeClear() { clearModal.hidden = true; focusScan(); }
+$("clear").addEventListener("click", () => {
+  const list = load();
+  const sent = list.filter(r => r.sent).length, waiting = list.length - sent;
+  if (!list.length) { setStatus("The list is already empty."); return; }
+  if (!sent) { setStatus(`Nothing to clear yet: ${waiting} scan(s) still waiting to send.`, "dup"); return; }
+  $("clearMsg").textContent = `Clear ${sent} sent scan(s) from this screen? They stay saved in the Google Sheet.` +
+    (waiting ? ` ${waiting} scan(s) still waiting to send will be kept.` : "");
+  $("clearPw").value = ""; $("clearErr").hidden = true;
+  clearModal.hidden = false; $("clearPw").focus();
+});
+function doClear() {
+  if ($("clearPw").value !== CLEAR_PASSWORD) { $("clearErr").hidden = false; $("clearPw").select(); beep(200, 300); return; }
+  const kept = load().filter(r => !r.sent);
+  save(kept); closeClear(); render();
+  setStatus(kept.length ? `List cleared. ${kept.length} scan(s) still waiting to send.` : "List cleared.", "ok");
+}
+$("clearCancel").addEventListener("click", closeClear);
+$("clearOk").addEventListener("click", doClear);
+clearModal.addEventListener("keydown", e => { if (e.key === "Escape") closeClear(); if (e.key === "Enter") doClear(); });
+
 codeBox.addEventListener("blur", () => setTimeout(() => { if (document.activeElement === document.body) focusScan(); }, 50));
 document.addEventListener("click", e => {
-  if (e.target === packerBox || e.target === tableBox || e.target.closest("button") || e.target.closest("#modal")) return;
+  if (e.target === packerBox || e.target === tableBox || e.target.closest("button") || e.target.closest("#modal, #clearModal")) return;
   focusScan();
 });
 ["A", "B"].forEach(set => {                       // Set A: cameras 1-4, Set B: cameras 1-4
