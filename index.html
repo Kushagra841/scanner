@@ -264,7 +264,7 @@ async function doDownload() {
     const timer = setTimeout(() => ctl.abort(), 60000);
     const res = await fetch(SCRIPT_URL, {
       method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "export", admin: pw }), signal: ctl.signal
+      body: JSON.stringify({ action: "export", admin: pw, day: $("allDays").checked ? "" : $("day").value }), signal: ctl.signal
     });
     clearTimeout(timer);
     const out = await res.json();
