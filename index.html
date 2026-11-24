@@ -37,6 +37,10 @@
   .pending { color: #8a5a00; font-weight: 600; }
   .btns { display: flex; gap: 10px; flex-wrap: wrap; }
   button.danger { background: #b03030; }
+  .btns label.day { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 16px; }
+  .btns input[type=date] { font-size: 16px; padding: 9px 10px; border: 2px solid #9aa7b5; border-radius: 8px; }
+  .btns input[type=date]:disabled { opacity: .5; }
+  .btns input[type=checkbox] { width: 18px; height: 18px; }
   #modal, #clearModal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 20; }
   #modal[hidden], #clearModal[hidden] { display: none; }
   #modal .box, #clearModal .box { background: #fff; border-radius: 12px; padding: 22px; width: 100%; max-width: 400px; }
@@ -72,6 +76,10 @@
       <div class="count" id="count"></div>
       <div class="btns">
         <button id="clear" class="grey">Clear list</button>
+        <label class="day" for="day">Day
+          <input type="date" id="day">
+        </label>
+        <label class="day"><input type="checkbox" id="allDays"> All days</label>
         <button id="export">Download Excel (CSV)</button>
       </div>
     </div>
@@ -238,7 +246,11 @@ codeBox.addEventListener("keydown", e => {
 });
 
 // ---- download everything from the central sheet (admin password asked first) ----
-function openModal() { $("pw").value = ""; $("modalErr").hidden = true; modal.hidden = false; $("pw").focus(); }
+function openModal() {
+  if (!$("allDays").checked && !$("day").value) { setStatus("Pick a day first, or tick All days.", "err"); return; }
+  $("modalMsg").textContent = "Admin only. Type the admin password to download " +
+    ($("allDays").checked ? "scans for ALL days." : `scans for ${$("day").value}.`);
+  $("pw").value = ""; $("modalErr").hidden = true; modal.hidden = false; $("pw").focus(); }
 function closeModal() { modal.hidden = true; focusScan(); }
 
 async function doDownload() {
@@ -258,16 +270,20 @@ async function doDownload() {
     const out = await res.json();
     if (!out.ok) { err.textContent = out.error === "wrong admin password" ? "Wrong password." : "Not allowed: " + out.error; err.hidden = false; return; }
 
+    const day = $("allDays").checked ? "" : $("day").value;          // "" means every day
+    const rows = day ? out.rows.filter(r => String(r[1]).slice(0, 10) === day) : out.rows;
+    if (!rows.length) { err.textContent = day ? `No scans found for ${day}.` : "No scans in the sheet yet."; err.hidden = false; return; }
+
     const q = s => '"' + String(s).replace(/"/g, '""') + '"';
     const lines = ["Date,Time,Packer,Camera / Table,Barcode,Repeat scan,Received at,Status"].concat(
-      out.rows.map(r => [r[1], r[2], q(r[3]), q(r[8] || ""), `="${r[4]}"`, r[5], r[6], r[7] || "Forward"].join(",")));   // ="..." keeps long barcodes intact in Excel
+      rows.map(r => [r[1], r[2], q(r[3]), q(r[8] || ""), `="${r[4]}"`, r[5], r[6], r[7] || "Forward"].join(",")));   // ="..." keeps long barcodes intact in Excel
     const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `scans_${dateStr(new Date())}.csv`;
+    a.download = day ? `scans_${day}.csv` : `scans_all_till_${dateStr(new Date())}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     closeModal();
-    setStatus(`Downloaded ${out.rows.length} scans.`, "ok");
+    setStatus(`Downloaded ${rows.length} scans` + (day ? ` for ${day}.` : " (all days)."), "ok");
   } catch (e) {
     err.textContent = "Could not download. Check the internet and try again."; err.hidden = false;
   } finally { ok.disabled = false; ok.textContent = "Download"; }
@@ -319,6 +335,10 @@ packerBox.addEventListener("keydown", e => { if (e.key === "Enter") { localStora
 packerBox.addEventListener("change", () => localStorage.setItem("packer_name", packerBox.value.trim()));
 
 try { packerBox.value = localStorage.getItem("packer_name") || ""; } catch (e) {}
+$("day").value = dateStr(new Date());            // the day picker starts on today
+$("day").max = dateStr(new Date());
+$("allDays").addEventListener("change", () => { $("day").disabled = $("allDays").checked; });
+$("day").addEventListener("change", focusScan);
 render();
 focusScan();
 flush();
