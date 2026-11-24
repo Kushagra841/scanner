@@ -275,8 +275,11 @@ async function doDownload() {
     if (!rows.length) { err.textContent = day ? `No scans found for ${day}.` : "No scans in the sheet yet."; err.hidden = false; return; }
 
     const q = s => '"' + String(s).replace(/"/g, '""') + '"';
+    const txt = s => '"=""' + String(s).replace(/"/g, '""""') + '"""';   // Excel shows it as text, exactly
     const lines = ["Date,Time,Packer,Camera / Table,Barcode,Repeat scan,Received at,Status"].concat(
-      rows.map(r => [r[1], r[2], q(r[3]), q(r[8] || ""), `="${r[4]}"`, r[5], r[6], r[7] || "Forward"].join(",")));   // ="..." keeps long barcodes intact in Excel
+      // ="..." makes Excel show the value exactly as written (long barcodes stay whole,
+      // and times like 12:11:10.683 are not turned into "11:10.7")
+      rows.map(r => [txt(r[1]), txt(r[2]), q(r[3]), q(r[8] || ""), txt(r[4]), r[5], txt(r[6]), r[7] || "Forward"].join(",")));
     const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
