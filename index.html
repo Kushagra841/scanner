@@ -173,44 +173,61 @@ function render() {
   else setNet("All scans sent", "ok");
 }
 
-// ---- sending: one at a time, in order, retried until it works ----
+// ---- sending: waiting scans go in batches, in order, retried until it works ----
+const BATCH_SIZE = 25;            // scans sent together in one request
+let batchOK = true;               // turns false if the Google script is an older one that takes one scan at a time
 let sending = false;
+
+async function post(body) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 30000);
+  try {
+    const res = await fetch(SCRIPT_URL, {
+      method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body), signal: ctl.signal
+    });
+    return await res.json();
+  } finally { clearTimeout(timer); }
+}
+const pick = r => ({ id: r.id, date: r.date, time: r.time, packer: r.packer, table: r.table, code: r.code });
+
 async function flush() {
   if (sending || !configured) return;
   sending = true;
   try {
     while (true) {
-      const list = load();
-      const item = list.find(r => !r.sent);
-      if (!item) break;
-      let result;
-      try {
-        const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 25000);
-        const res = await fetch(SCRIPT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ key: SECRET, id: item.id, date: item.date, time: item.time, packer: item.packer, table: item.table, code: item.code }),
-          signal: ctl.signal
-        });
-        clearTimeout(timer);
-        result = await res.json();
-      } catch (e) { setNet("No internet. Scans are safe on this PC.", "wait"); break; }
+      const waiting = load().filter(r => !r.sent);
+      if (!waiting.length) break;
+      const group = waiting.slice(0, batchOK ? BATCH_SIZE : 1);
 
-      if (!result || !result.ok) { setNet("Could not send. Tell the admin.", "bad"); break; }
+      let results;                                   // [{ id, repeat, firstSeen }, ...]
+      try {
+        if (batchOK) {
+          const out = await post({ key: SECRET, items: group.map(pick) });
+          if (out && out.ok && Array.isArray(out.results)) results = out.results;
+          else if (out && (out.ok || out.error === "missing data")) { batchOK = false; continue; }   // older script: send one by one
+          else { setNet("Could not send. Tell the admin.", "bad"); break; }
+        } else {
+          const out = await post(Object.assign({ key: SECRET }, pick(group[0])));
+          if (!out || !out.ok) { setNet("Could not send. Tell the admin.", "bad"); break; }
+          results = [Object.assign({ id: group[0].id }, out)];
+        }
+      } catch (e) { setNet("No internet. Scans are safe on this PC.", "wait"); break; }
+      if (!results.length) { setNet("Could not send. Tell the admin.", "bad"); break; }
 
       const fresh = load();
-      const row = fresh.find(r => r.id === item.id);
-      if (row) {
+      results.forEach(res => {
+        const row = fresh.find(r => r.id === res.id);
+        if (!row) return;
         row.sent = true;
-        if (result.repeat) row.repeat = true;
-        // keep unsent rows and the latest 200 sent rows
-        const keep = fresh.filter(r => !r.sent).concat(fresh.filter(r => r.sent).slice(-200));
-        save(fresh.filter(r => keep.includes(r)));
-      }
-      if (result.repeat && item.id === lastId) {
-        setStatus(`ALREADY SCANNED before (${result.firstSeen}).`, "dup"); beep(300, 500);
-      }
+        if (res.repeat) row.repeat = true;
+        if (res.repeat && res.id === lastId) {
+          setStatus(`ALREADY SCANNED before (${res.firstSeen}).`, "dup"); beep(300, 500);
+        }
+      });
+      // keep unsent rows and the latest 200 sent rows
+      const keep = fresh.filter(r => !r.sent).concat(fresh.filter(r => r.sent).slice(-200));
+      save(fresh.filter(r => keep.includes(r)));
       render();
     }
   } finally { sending = false; render(); }
