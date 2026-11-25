@@ -4,7 +4,13 @@
 const SECRET = "shantam@143";   // must be the same as SECRET in the page (index.html)
 const ADMIN_KEY = "set-your-own-admin-password";   // ONLY for downloads. Never put this in the page.
 const SHEET_NAME = "Scans";
-const HEADERS = ["Scan ID", "Date", "Time", "Packer", "Barcode", "Repeat scan", "Received at", "Status", "Camera / Table"];
+const HEADERS = ["Scan ID", "Date", "Time", "Packer", "Barcode", "Repeat scan", "Received at", "Status", "Camera / Table",
+                 "Times scanned", "First scan"];
+// Repeat scans:
+//  - same barcode again on the SAME day -> that day's row is updated (latest time, packer, camera;
+//    Times scanned +1; First scan keeps the first one). No new row.
+//  - same barcode on a LATER day        -> the old row is never touched. A new row is added with
+//    Repeat scan = "OLD (first date)" so a wrong scan can be found later.
 const STATUS_TEXT = "Forward";            // goes in the Status column of every row
 const MAX_BATCH = 50;                     // most scans accepted in one request
 const ARCHIVE_PREFIX = "Archive ";        // old months move to tabs like "Archive 2026-09"
@@ -13,7 +19,9 @@ const KEEP_MONTHS = 2;                    // months kept on the main tab: this m
 // Adds the Status column to an older sheet and fills it for rows already there
 function ensureStatus(sh) {
   if (sh.getLastRow() < 1) return;
-  if (sh.getRange(1, 9).getValue() !== "Camera / Table") sh.getRange(1, 9).setValue("Camera / Table").setFontWeight("bold");
+  [9, 10, 11].forEach(function (c) {          // newer columns get their header on an older sheet
+    if (sh.getRange(1, c).getValue() !== HEADERS[c - 1]) sh.getRange(1, c).setValue(HEADERS[c - 1]).setFontWeight("bold");
+  });
   if (sh.getRange(1, 8).getValue() === "Status") return;
   sh.getRange(1, 8).setValue("Status").setFontWeight("bold");
   const n = sh.getLastRow() - 1;
@@ -71,44 +79,74 @@ function doPost(e) {
     const now = new Date();
     const newRows = [], results = [];
     const idsInBatch = {}, codesInBatch = {};      // scans in this same request, not yet in the sheet
+    const sameDay = {};                            // "barcode|date" -> { row: sheet row or 0 if new, v: values }
     const hasArchive = archiveTabs(ss).length > 0;
 
     items.forEach(function (it) {
-      const id = String(it.id), code = String(it.code);
+      const id = String(it.id), code = String(it.code), date = String(it.date);
 
-      // same scan sent twice (for example after a bad connection): ignore the second copy
-      if (idsInBatch[id] || (last > 1 && findExact(sh.getRange(2, 1, last - 1, 1), id))) {
+      // same scan sent twice (for example after a bad connection): ignore the second copy.
+      // A row updated by repeat scans holds all their IDs, so the search is not whole-cell.
+      if (idsInBatch[id] || (last > 1 && findText(sh.getRange(2, 1, last - 1, 1), id))) {
         results.push({ id: id, ok: true, repeat: false, duplicateRequest: true });
         return;
       }
+      idsInBatch[id] = true;
 
-      // has this barcode been scanned before? Google's own search looks through the
-      // whole Barcode column at once, so it stays fast however many rows there are.
+      // 1) same barcode already scanned on this same day: update that row, no new row
+      const key = code + "|" + date;
+      if (!(key in sameDay)) {
+        const r = last > 1 ? findSameDayRow(sh, last, code, date) : 0;
+        sameDay[key] = r ? { row: r, v: sh.getRange(r, 1, 1, HEADERS.length).getValues()[0] } : null;
+      }
+      const t = sameDay[key];
+      if (t) {
+        const v = t.v;
+        const first = v[10] ? String(v[10]) : describe(v);
+        v[0] = String(v[0]) + " " + id;            // keep every scan ID in the row
+        v[2] = String(it.time); v[3] = String(it.packer); v[6] = now; v[8] = String(it.table || "");
+        v[9] = (Number(v[9]) || 1) + 1;
+        v[10] = first;
+        if (String(v[5]).indexOf("OLD") !== 0) v[5] = "YES";
+        t.dirty = true;
+        results.push({ id: id, ok: true, repeat: true, sameDay: true, times: v[9], firstSeen: first });
+        return;
+      }
+
+      // 2) scanned on an earlier day? Google's own search looks through the whole Barcode
+      // column at once, so it stays fast however many rows there are.
       // Archive tabs hold the oldest scans, so they are checked first.
-      let firstSeen = "";
+      let firstSeen = "", firstDate = "";
       let hit = hasArchive ? findInArchives(ss, code) : null;
       if (!hit && last > 1) hit = findExact(sh.getRange(2, 5, last - 1, 1), code);   // first (oldest) match
       if (hit) {
-        const r = hit.getSheet().getRange(hit.getRow(), 2, 1, 3).getValues()[0];   // Date, Time, Packer
-        firstSeen = r[0] + " " + r[1] + " by " + r[2];
+        const r = hit.getSheet().getRange(hit.getRow(), 1, 1, HEADERS.length).getValues()[0];
+        firstSeen = describe(r); firstDate = String(r[1]);
       }
-      if (!firstSeen && codesInBatch[code]) firstSeen = codesInBatch[code];
+      if (!firstSeen && codesInBatch[code]) { firstSeen = codesInBatch[code].who; firstDate = codesInBatch[code].date; }
 
-      const row = [id, String(it.date), String(it.time), String(it.packer), code,
-                   firstSeen ? "YES" : "", now, STATUS_TEXT, String(it.table || "")];
+      // 3) new row (marked OLD when the barcode was already scanned on an earlier day)
+      const row = [id, date, String(it.time), String(it.packer), code,
+                   firstSeen ? "OLD (" + firstDate + ")" : "", now, STATUS_TEXT, String(it.table || ""),
+                   1, firstSeen];
       newRows.push(row);
-      idsInBatch[id] = true;
-      if (!codesInBatch[code]) codesInBatch[code] = row[1] + " " + row[2] + " by " + row[3];
-      results.push({ id: id, ok: true, repeat: !!firstSeen, firstSeen: firstSeen });
+      sameDay[key] = { row: 0, v: row };           // a later scan in this request updates this new row
+      if (!codesInBatch[code]) codesInBatch[code] = { who: describe(row), date: date };
+      results.push({ id: id, ok: true, repeat: !!firstSeen, old: !!firstSeen, firstSeen: firstSeen });
     });
 
-    // all new rows are written in one go
+    // rows updated by same-day repeat scans, then all new rows in one go
+    Object.keys(sameDay).forEach(function (k) {
+      const t = sameDay[k];
+      if (t && t.row && t.dirty) sh.getRange(t.row, 1, 1, HEADERS.length).setValues([t.v]);
+    });
     if (newRows.length) sh.getRange(last + 1, 1, newRows.length, HEADERS.length).setValues(newRows);
 
     if (batch) return reply({ ok: true, results: results });
     const one = results[0];                        // reply in the old shape for a single scan
     return reply(one.duplicateRequest ? { ok: true, repeat: false, duplicateRequest: true }
-                                      : { ok: true, repeat: one.repeat, firstSeen: one.firstSeen });
+                                      : { ok: true, repeat: one.repeat, firstSeen: one.firstSeen,
+                                          sameDay: !!one.sameDay, old: !!one.old, times: one.times });
   } catch (err) {
     return reply({ ok: false, error: String(err) });
   } finally {
@@ -119,6 +157,27 @@ function doPost(e) {
 // Exact, case-sensitive search inside one column. Returns the first matching cell or null.
 function findExact(range, value) {
   return range.createTextFinder(String(value)).matchEntireCell(true).matchCase(true).findNext();
+}
+
+// Like findExact, but the value may be one word among several in the cell (Scan ID column).
+function findText(range, value) {
+  return range.createTextFinder(String(value)).matchEntireCell(false).matchCase(true).findNext();
+}
+
+// Row number on the main tab where this barcode was scanned on this date (latest one), or 0.
+function findSameDayRow(sh, last, code, date) {
+  const hits = sh.getRange(2, 5, last - 1, 1).createTextFinder(String(code))
+    .matchEntireCell(true).matchCase(true).findAll();
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const r = hits[i].getRow();
+    if (String(sh.getRange(r, 2).getValue()) === date) return r;
+  }
+  return 0;
+}
+
+// "2026-11-10 10:00:05 by Ravi, Camera 1" from a row's values
+function describe(v) {
+  return String(v[1]) + " " + String(v[2]).slice(0, 8) + " by " + String(v[3]) + (v[8] ? ", " + v[8] : "");
 }
 
 // All "Archive YYYY-MM" tabs, oldest month first
@@ -224,6 +283,8 @@ function archiveSheet(ss, month) {
     a.setFrozenRows(1);
     a.getRange("A:E").setNumberFormat("@");
     a.getRange("G:G").setNumberFormat("yyyy-mm-dd hh:mm:ss");
+  } else if (a.getRange(1, HEADERS.length).getValue() !== HEADERS[HEADERS.length - 1]) {
+    a.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setFontWeight("bold");   // older tab: add new headers
   }
   return a;
 }

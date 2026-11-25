@@ -32,6 +32,7 @@
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e1e6ec; white-space: nowrap; }
   th { background: #eef2f6; position: sticky; top: 0; }
   tr.dup td { background: #fff4d6; }
+  tr.old td { background: #ffd6d6; }
   .scroll { max-height: 380px; overflow: auto; }
   .sent { color: #135c22; font-weight: 600; }
   .pending { color: #8a5a00; font-weight: 600; }
@@ -85,7 +86,7 @@
     </div>
     <div class="scroll">
       <table>
-        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Camera</th><th>Barcode</th><th>Status</th><th>Sent</th></tr></thead>
+        <thead><tr><th>Date</th><th>Time</th><th>Packer</th><th>Camera</th><th>Barcode</th><th>Times</th><th>Status</th><th>Sent</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -155,13 +156,22 @@ function render() {
   const list = load();
   const today = dateStr(new Date());
   const waiting = list.filter(r => !r.sent).length;
-  $("count").textContent = `Scans today on this PC: ${list.filter(r => r.date === today).length}` +
+  // a barcode scanned again on the same day is one row in the sheet, so it is shown once here too
+  const times = {};
+  list.forEach(r => { const k = r.code + "|" + r.date; times[k] = (times[k] || 0) + 1; });
+  const todayCodes = new Set(list.filter(r => r.date === today).map(r => r.code));
+  $("count").textContent = `Scans today on this PC: ${todayCodes.size}` +
                            (waiting ? `   |   Waiting to send: ${waiting}` : "");
   const body = $("rows"); body.textContent = "";
-  list.slice(-50).reverse().forEach(r => {
+  const shown = new Set();
+  list.slice().reverse().filter(r => {
+    const k = r.code + "|" + r.date;
+    if (shown.has(k)) return false;
+    shown.add(k); return true;
+  }).slice(0, 50).forEach(r => {
     const tr = document.createElement("tr");
-    if (r.repeat) tr.className = "dup";
-    [r.date, r.time, r.packer, r.table || "", r.code, "Forward"].forEach(v => {
+    if (r.old) tr.className = "old"; else if (r.repeat) tr.className = "dup";
+    [r.date, r.time, r.packer, r.table || "", r.code, times[r.code + "|" + r.date], "Forward"].forEach(v => {
       const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
     });
     const td = document.createElement("td");
@@ -221,8 +231,11 @@ async function flush() {
         if (!row) return;
         row.sent = true;
         if (res.repeat) row.repeat = true;
+        if (res.old) row.old = true;
         if (res.repeat && res.id === lastId) {
-          setStatus(`ALREADY SCANNED before (${res.firstSeen}).`, "dup"); beep(300, 500);
+          if (res.old) { setStatus(`OLD BARCODE! Already packed on ${res.firstSeen}. Saved and marked OLD.`, "err"); beep(200, 900); }
+          else if (res.sameDay) { setStatus(`Scanned again today (${res.times} times). Same row updated. First: ${res.firstSeen}`, "dup"); beep(300, 500); }
+          else { setStatus(`ALREADY SCANNED before (${res.firstSeen}).`, "dup"); beep(300, 500); }   // older Google script
         }
       });
       // keep unsent rows and the latest 200 sent rows
@@ -249,14 +262,18 @@ codeBox.addEventListener("keydown", e => {
   if (!table) { setStatus("Please choose your set and camera number first, then scan again.", "err"); beep(200, 400); tableBox.focus(); return; }
 
   const list = load();
-  const earlier = list.find(r => r.code === code);
+  const today = dateStr(now);
+  const sameDay = list.find(r => r.code === code && r.date === today);     // first scan of it today
+  const older = list.find(r => r.code === code && r.date < today);         // scanned on an earlier day
   const item = { id: now.getTime().toString(36) + Math.random().toString(36).slice(2, 7),
-                 date: dateStr(now), time: timeStr(now), packer, table, code, sent: false, repeat: !!earlier };
+                 date: today, time: timeStr(now), packer, table, code, sent: false,
+                 repeat: !!(sameDay || older), old: !!older || !!(sameDay && sameDay.old) };
   list.push(item);
   if (!save(list)) { setStatus("COULD NOT SAVE. Tell the admin.", "err"); beep(200, 600); return; }
   lastId = item.id;
 
-  if (earlier) { setStatus(`ALREADY SCANNED before (${earlier.date} ${earlier.time}). Saved again.`, "dup"); beep(300, 500); }
+  if (older) { setStatus(`OLD BARCODE! Already scanned on ${older.date} ${older.time.slice(0, 8)} by ${older.packer}. Saved and marked OLD.`, "err"); beep(200, 900); }
+  else if (sameDay) { setStatus(`Scanned again today (first at ${sameDay.time.slice(0, 8)} by ${sameDay.packer}). Same row will be updated.`, "dup"); beep(300, 500); }
   else { setStatus(`Saved: ${code}   at ${timeStr(now)}`, "ok"); beep(1000, 120); }
   render();
   flush();
@@ -293,10 +310,11 @@ async function doDownload() {
 
     const q = s => '"' + String(s).replace(/"/g, '""') + '"';
     const txt = s => '"=""' + String(s).replace(/"/g, '""""') + '"""';   // Excel shows it as text, exactly
-    const lines = ["Date,Time,Packer,Camera / Table,Barcode,Repeat scan,Received at,Status"].concat(
+    const lines = ["Date,Time,Packer,Camera / Table,Barcode,Repeat scan,Received at,Status,Times scanned,First scan"].concat(
       // ="..." makes Excel show the value exactly as written (long barcodes stay whole,
       // and times like 12:11:10.683 are not turned into "11:10.7")
-      rows.map(r => [txt(r[1]), txt(r[2]), q(r[3]), q(r[8] || ""), txt(r[4]), r[5], txt(r[6]), r[7] || "Forward"].join(",")));
+      rows.map(r => [txt(r[1]), txt(r[2]), q(r[3]), q(r[8] || ""), txt(r[4]), r[5], txt(r[6]), r[7] || "Forward",
+                     r[9] || 1, q(r[10] || "")].join(",")));
     const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
